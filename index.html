@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#274a36">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="熊鈴">
+<title>熊鈴 - 加速度センサー連動ベル</title>
+<style>
+  :root{
+    --bg:#12261c;
+    --bg2:#0b1a13;
+    --accent:#e8b84b;
+    --accent2:#c98a2c;
+    --fg:#f2ede1;
+    --muted:#9db3a3;
+    --ring-idle:#2c4a38;
+    --ring-active:#e8b84b;
+    --danger:#c0503c;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Yu Gothic",sans-serif;
+    background:radial-gradient(circle at 50% -10%, var(--bg) 0%, var(--bg2) 70%);
+    color:var(--fg);
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    padding:max(20px, env(safe-area-inset-top)) 20px max(20px, env(safe-area-inset-bottom));
+    -webkit-tap-highlight-color:transparent;
+    user-select:none;
+  }
+  header{
+    text-align:center;
+    margin-bottom:8px;
+  }
+  h1{
+    font-size:20px;
+    letter-spacing:.08em;
+    margin:0 0 4px;
+    font-weight:600;
+  }
+  .sub{
+    font-size:12px;
+    color:var(--muted);
+    letter-spacing:.04em;
+  }
+
+  .stage{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    width:100%;
+    max-width:420px;
+  }
+
+  .ring-wrap{
+    position:relative;
+    width:min(62vw, 260px);
+    height:min(62vw, 260px);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    margin:18px 0 26px;
+  }
+  .pulse{
+    position:absolute;
+    inset:0;
+    border-radius:50%;
+    background:var(--ring-active);
+    opacity:0;
+    transform:scale(.7);
+  }
+  .pulse.fire{
+    animation:pulseOut .55s ease-out;
+  }
+  @keyframes pulseOut{
+    0%{opacity:.45; transform:scale(.7);}
+    100%{opacity:0; transform:scale(1.25);}
+  }
+  .dial{
+    position:relative;
+    width:100%;
+    height:100%;
+    border-radius:50%;
+    background:linear-gradient(160deg,#1c3a2a,#0e2118);
+    border:2px solid var(--ring-idle);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .dial.active{
+    border-color:var(--ring-active);
+    box-shadow:0 0 0 6px rgba(232,184,75,.12), 0 0 30px rgba(232,184,75,.15);
+  }
+  .dial.ringing{
+    animation:ringPop .3s ease-out;
+  }
+  @keyframes ringPop{
+    0%{transform:scale(1);}
+    30%{transform:scale(1.04);}
+    100%{transform:scale(1);}
+  }
+  .bell-icon{
+    width:54px;
+    height:54px;
+    margin-bottom:10px;
+    color:var(--muted);
+    transform-origin:50% 15%;
+    transition:color .15s;
+  }
+  .dial.active .bell-icon{ color:var(--accent); }
+  .bell-icon.swing{
+    animation:swing .35s ease-out;
+  }
+  @keyframes swing{
+    0%{transform:rotate(0deg);}
+    25%{transform:rotate(-14deg);}
+    55%{transform:rotate(10deg);}
+    80%{transform:rotate(-4deg);}
+    100%{transform:rotate(0deg);}
+  }
+  .status-text{
+    font-size:14px;
+    font-weight:600;
+    letter-spacing:.05em;
+    color:var(--muted);
+  }
+  .dial.active .status-text{ color:var(--accent); }
+
+  .meter{
+    width:100%;
+    max-width:280px;
+    height:6px;
+    border-radius:4px;
+    background:rgba(255,255,255,.08);
+    overflow:hidden;
+    margin-bottom:22px;
+  }
+  .meter-fill{
+    height:100%;
+    width:0%;
+    background:linear-gradient(90deg,#5c8f6d,var(--accent));
+    transition:width .08s linear;
+  }
+
+  .main-btn{
+    width:100%;
+    max-width:280px;
+    padding:16px 20px;
+    border-radius:16px;
+    border:none;
+    font-size:17px;
+    font-weight:700;
+    letter-spacing:.06em;
+    cursor:pointer;
+    background:var(--accent);
+    color:#28210b;
+    box-shadow:0 8px 20px rgba(232,184,75,.25);
+    transition:transform .1s, background .15s;
+  }
+  .main-btn:active{ transform:scale(.97); }
+  .main-btn.stop{
+    background:var(--danger);
+    color:#fff2ee;
+    box-shadow:0 8px 20px rgba(192,80,60,.25);
+  }
+  .main-btn:disabled{
+    opacity:.5;
+    cursor:default;
+    transform:none;
+  }
+
+  .panel{
+    width:100%;
+    max-width:420px;
+    background:rgba(255,255,255,.035);
+    border:1px solid rgba(255,255,255,.06);
+    border-radius:18px;
+    padding:18px 20px 8px;
+    margin-top:22px;
+  }
+  .field{
+    margin-bottom:16px;
+  }
+  .field-label{
+    display:flex;
+    justify-content:space-between;
+    font-size:13px;
+    color:var(--muted);
+    margin-bottom:8px;
+  }
+  .field-label b{
+    color:var(--fg);
+    font-weight:600;
+  }
+  input[type="range"]{
+    -webkit-appearance:none;
+    width:100%;
+    height:4px;
+    border-radius:4px;
+    background:rgba(255,255,255,.15);
+    outline:none;
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    width:20px;
+    height:20px;
+    border-radius:50%;
+    background:var(--accent);
+    border:2px solid #12261c;
+    cursor:pointer;
+  }
+  input[type="range"]::-moz-range-thumb{
+    width:20px;
+    height:20px;
+    border-radius:50%;
+    background:var(--accent);
+    border:2px solid #12261c;
+    cursor:pointer;
+  }
+
+  .msg{
+    font-size:12.5px;
+    line-height:1.7;
+    color:var(--muted);
+    text-align:center;
+    max-width:340px;
+    margin:16px auto 0;
+  }
+  .msg.error{
+    color:#f0a48f;
+  }
+  .test-btn{
+    width:100%;
+    padding:10px;
+    margin-top:2px;
+    margin-bottom:14px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,.15);
+    background:transparent;
+    color:var(--fg);
+    font-size:13px;
+    cursor:pointer;
+  }
+  .test-btn:active{ background:rgba(255,255,255,.08); }
+
+  footer{
+    margin-top:26px;
+    font-size:11px;
+    color:#5f7469;
+    text-align:center;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>熊鈴</h1>
+  <div class="sub">加速度センサー連動ベル</div>
+</header>
+
+<div class="stage">
+  <div class="ring-wrap">
+    <div class="pulse" id="pulse"></div>
+    <div class="dial" id="dial">
+      <svg class="bell-icon" id="bellIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+        <path d="M12 3.2a1 1 0 0 1 1 1v.32A6.5 6.5 0 0 1 18.4 11v3.3l1.4 2.4a.6.6 0 0 1-.52.9H4.72a.6.6 0 0 1-.52-.9L5.6 14.3V11A6.5 6.5 0 0 1 11 4.52V4.2a1 1 0 0 1 1-1z" stroke-linejoin="round"/>
+        <path d="M9.6 18.6a2.6 2.6 0 0 0 4.8 0" stroke-linecap="round"/>
+      </svg>
+      <div class="status-text" id="statusText">停止中</div>
+    </div>
+  </div>
+
+  <div class="meter"><div class="meter-fill" id="meterFill"></div></div>
+
+  <button class="main-btn" id="mainBtn">開始する</button>
+  <div class="msg" id="msg">画面をオンにしたまま、ポケットやバッグに入れて使用してください。開始には端末の動きを検知する許可が必要です。</div>
+</div>
+
+<div class="panel">
+  <div class="field">
+    <div class="field-label"><span>感度</span><b id="sensLabel">中</b></div>
+    <input type="range" id="sensitivity" min="1" max="9" step="1" value="5">
+  </div>
+  <div class="field">
+    <div class="field-label"><span>音量</span><b id="volLabel">80%</b></div>
+    <input type="range" id="volume" min="0" max="100" step="5" value="80">
+  </div>
+  <button class="test-btn" id="testBtn">テスト再生</button>
+</div>
+
+<footer>通信不要・すべて端末内で動作します</footer>
+
+<script>
+(() => {
+  const dial = document.getElementById('dial');
+  const pulse = document.getElementById('pulse');
+  const bellIcon = document.getElementById('bellIcon');
+  const statusText = document.getElementById('statusText');
+  const meterFill = document.getElementById('meterFill');
+  const mainBtn = document.getElementById('mainBtn');
+  const testBtn = document.getElementById('testBtn');
+  const msg = document.getElementById('msg');
+  const sensSlider = document.getElementById('sensitivity');
+  const sensLabel = document.getElementById('sensLabel');
+  const volSlider = document.getElementById('volume');
+  const volLabel = document.getElementById('volLabel');
+
+  const SENS_LABELS = {1:'とても弱い',2:'弱い',3:'弱め',4:'やや弱め',5:'中',6:'やや強め',7:'強め',8:'強い',9:'とても強い'};
+  // sensitivity 1..9 -> threshold (m/s^2), higher sensitivity = lower threshold
+  const sensToThreshold = v => {
+    const min = 0.35, max = 3.2;
+    const t = (9 - v) / 8; // 0 at v=9, 1 at v=1
+    return min + t * (max - min);
+  };
+
+  let threshold = sensToThreshold(Number(sensSlider.value));
+  let volume = Number(volSlider.value) / 100;
+
+  sensSlider.addEventListener('input', () => {
+    sensLabel.textContent = SENS_LABELS[sensSlider.value];
+    threshold = sensToThreshold(Number(sensSlider.value));
+  });
+  volSlider.addEventListener('input', () => {
+    volLabel.textContent = volSlider.value + '%';
+    volume = Number(volSlider.value) / 100;
+  });
+  sensLabel.textContent = SENS_LABELS[sensSlider.value];
+
+  // ---- Audio: synthesized bell (suzu) sound ----
+  let audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  function playChime(gain) {
+    const ctx = ensureAudio();
+    const now = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.value = gain;
+    master.connect(ctx.destination);
+
+    const partials = [2000, 2950, 4200];
+    partials.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      const detune = (Math.random() - 0.5) * 30;
+      osc.frequency.value = freq + detune;
+
+      const g = ctx.createGain();
+      const peak = i === 0 ? 0.9 : 0.4 / (i + 1);
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(peak, now + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0008, now + 0.32 + i * 0.02);
+
+      osc.connect(g);
+      g.connect(master);
+      osc.start(now);
+      osc.stop(now + 0.4);
+    });
+  }
+
+  function ringBell(intensity) {
+    // intensity 0..1 -> slight volume scaling + a quick double "jingle"
+    const base = 0.15 + intensity * 0.55;
+    playChime(base * volume);
+    setTimeout(() => playChime(base * 0.7 * volume), 70 + Math.random() * 40);
+  }
+
+  // ---- Visual feedback ----
+  function flashRing(intensity) {
+    pulse.classList.remove('fire');
+    void pulse.offsetWidth;
+    pulse.classList.add('fire');
+    dial.classList.remove('ringing');
+    void dial.offsetWidth;
+    dial.classList.add('ringing');
+    bellIcon.classList.remove('swing');
+    void bellIcon.offsetWidth;
+    bellIcon.classList.add('swing');
+  }
+
+  // ---- Motion detection ----
+  let running = false;
+  let gravity = {x:0, y:0, z:0};
+  let gravityInit = false;
+  let lastRing = 0;
+  const COOLDOWN_MS = 260;
+  let wakeLock = null;
+
+  function handleMotion(e) {
+    let ax, ay, az;
+    const lin = e.acceleration;
+    const withG = e.accelerationIncludingGravity;
+
+    if (lin && (lin.x !== null && lin.x !== undefined)) {
+      ax = lin.x || 0; ay = lin.y || 0; az = lin.z || 0;
+    } else if (withG && withG.x !== null && withG.x !== undefined) {
+      const gx = withG.x || 0, gy = withG.y || 0, gz = withG.z || 0;
+      if (!gravityInit) {
+        gravity = {x:gx, y:gy, z:gz};
+        gravityInit = true;
+      }
+      const alpha = 0.85;
+      gravity.x = alpha * gravity.x + (1 - alpha) * gx;
+      gravity.y = alpha * gravity.y + (1 - alpha) * gy;
+      gravity.z = alpha * gravity.z + (1 - alpha) * gz;
+      ax = gx - gravity.x;
+      ay = gy - gravity.y;
+      az = gz - gravity.z;
+    } else {
+      return;
+    }
+
+    const mag = Math.sqrt(ax*ax + ay*ay + az*az);
+    const meterPct = Math.min(100, (mag / (threshold * 1.6)) * 100);
+    meterFill.style.width = meterPct + '%';
+
+    const now = performance.now();
+    if (mag > threshold && now - lastRing > COOLDOWN_MS) {
+      lastRing = now;
+      const intensity = Math.min(1, mag / (threshold * 3));
+      ringBell(intensity);
+      flashRing(intensity);
+    }
+  }
+
+  async function acquireWakeLock() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+      }
+    } catch (err) { /* ignore: not supported or denied */ }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (running && document.visibilityState === 'visible') acquireWakeLock();
+  });
+
+  async function start() {
+    mainBtn.disabled = true;
+    msg.classList.remove('error');
+    try {
+      ensureAudio();
+      // unlock audio with a silent tick (required by some mobile browsers)
+      playChime(0.0001);
+
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        const perm = await DeviceMotionEvent.requestPermission();
+        if (perm !== 'granted') {
+          throw new Error('モーションセンサーの利用が許可されませんでした。設定アプリから許可してください。');
+        }
+      }
+
+      if (!window.DeviceMotionEvent) {
+        throw new Error('この端末・ブラウザは加速度センサーに対応していません。');
+      }
+
+      window.addEventListener('devicemotion', handleMotion);
+      await acquireWakeLock();
+
+      running = true;
+      gravityInit = false;
+      dial.classList.add('active');
+      statusText.textContent = '検知中';
+      mainBtn.textContent = '停止する';
+      mainBtn.classList.add('stop');
+      msg.textContent = '動きを検知すると鈴が鳴ります。バックグラウンドでは動作しないため、画面を点けたままにしてください。';
+    } catch (err) {
+      msg.textContent = err.message || '開始できませんでした。';
+      msg.classList.add('error');
+    } finally {
+      mainBtn.disabled = false;
+    }
+  }
+
+  function stop() {
+    running = false;
+    window.removeEventListener('devicemotion', handleMotion);
+    if (wakeLock) { wakeLock.release().catch(()=>{}); wakeLock = null; }
+    dial.classList.remove('active');
+    statusText.textContent = '停止中';
+    meterFill.style.width = '0%';
+    mainBtn.textContent = '開始する';
+    mainBtn.classList.remove('stop');
+    msg.classList.remove('error');
+    msg.textContent = '画面をオンにしたまま、ポケットやバッグに入れて使用してください。開始には端末の動きを検知する許可が必要です。';
+  }
+
+  mainBtn.addEventListener('click', () => {
+    if (running) stop(); else start();
+  });
+
+  testBtn.addEventListener('click', () => {
+    ensureAudio();
+    ringBell(0.8);
+    flashRing(0.8);
+  });
+})();
+</script>
+
+</body>
+</html>
