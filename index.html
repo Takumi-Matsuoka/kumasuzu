@@ -7,6 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="熊鈴">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
 <title>熊鈴 - 加速度センサー連動ベル</title>
 <style>
   :root{
@@ -260,6 +262,93 @@
     color:#5f7469;
     text-align:center;
   }
+
+  /* 定期鳴動のトグルスイッチ */
+  .switch{
+    position:relative;
+    width:46px;
+    height:26px;
+    flex-shrink:0;
+  }
+  .switch input{
+    opacity:0;
+    width:100%;
+    height:100%;
+    margin:0;
+    position:absolute;
+    cursor:pointer;
+    z-index:1;
+  }
+  .switch .track{
+    position:absolute;
+    inset:0;
+    border-radius:13px;
+    background:rgba(255,255,255,.15);
+    transition:background .15s;
+  }
+  .switch .track::after{
+    content:"";
+    position:absolute;
+    top:3px;
+    left:3px;
+    width:20px;
+    height:20px;
+    border-radius:50%;
+    background:#cfd8d0;
+    transition:transform .15s, background .15s;
+  }
+  .switch input:checked + .track{
+    background:var(--accent2);
+  }
+  .switch input:checked + .track::after{
+    transform:translateX(20px);
+    background:#fff6e0;
+  }
+  .field-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+  }
+  #intervalField{
+    margin-top:14px;
+  }
+  #intervalField.hidden{ display:none; }
+
+  /* 省電力の暗転オーバーレイ */
+  .dim{
+    position:fixed;
+    inset:0;
+    background:#000;
+    z-index:50;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:14px;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity .4s;
+  }
+  .dim.show{
+    opacity:1;
+    pointer-events:auto;
+  }
+  .dim .dot{
+    width:10px;
+    height:10px;
+    border-radius:50%;
+    background:#3a3122;
+    transition:background .1s;
+  }
+  .dim .dot.on{
+    background:var(--accent);
+  }
+  .dim span{
+    font-size:12px;
+    color:#3d453f;
+    letter-spacing:.1em;
+  }
 </style>
 </head>
 <body>
@@ -296,10 +385,31 @@
     <div class="field-label"><span>音量</span><b id="volLabel">80%</b></div>
     <input type="range" id="volume" min="0" max="100" step="5" value="80">
   </div>
+  <div class="field">
+    <div class="field-row">
+      <div>
+        <div class="field-label" style="margin-bottom:2px;"><span>定期鳴動</span></div>
+        <div style="font-size:11.5px; color:var(--muted);">静かな状態が続いたら自動で鳴らす</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="intervalToggle">
+        <span class="track"></span>
+      </label>
+    </div>
+    <div id="intervalField" class="hidden">
+      <div class="field-label"><span>間隔</span><b id="intervalLabel">5秒</b></div>
+      <input type="range" id="intervalSec" min="2" max="20" step="1" value="5">
+    </div>
+  </div>
   <button class="test-btn" id="testBtn">テスト再生</button>
 </div>
 
 <footer>通信不要・すべて端末内で動作します</footer>
+
+<div class="dim" id="dimOverlay">
+  <div class="dot" id="dimDot"></div>
+  <span>検知中 — タップで戻る</span>
+</div>
 
 <script>
 (() => {
@@ -315,6 +425,12 @@
   const sensLabel = document.getElementById('sensLabel');
   const volSlider = document.getElementById('volume');
   const volLabel = document.getElementById('volLabel');
+  const intervalToggle = document.getElementById('intervalToggle');
+  const intervalField = document.getElementById('intervalField');
+  const intervalSlider = document.getElementById('intervalSec');
+  const intervalLabel = document.getElementById('intervalLabel');
+  const dimOverlay = document.getElementById('dimOverlay');
+  const dimDot = document.getElementById('dimDot');
 
   const SENS_LABELS = {1:'とても弱い',2:'弱い',3:'弱め',4:'やや弱め',5:'中',6:'やや強め',7:'強め',8:'強い',9:'とても強い'};
   // sensitivity 1..9 -> threshold (m/s^2), higher sensitivity = lower threshold
@@ -324,18 +440,53 @@
     return min + t * (max - min);
   };
 
+  // ---- 設定の保存・復元 ----
+  const STORE_KEY = 'kumasuzu-settings';
+  function loadSettings() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); }
+    catch { return {}; }
+  }
+  function saveSettings() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        sensitivity: Number(sensSlider.value),
+        volume: Number(volSlider.value),
+        intervalOn: intervalToggle.checked,
+        intervalSec: Number(intervalSlider.value),
+      }));
+    } catch { /* private mode等で保存できなくても動作は続ける */ }
+  }
+  {
+    const s = loadSettings();
+    if (s.sensitivity >= 1 && s.sensitivity <= 9) sensSlider.value = s.sensitivity;
+    if (s.volume >= 0 && s.volume <= 100) volSlider.value = s.volume;
+    if (typeof s.intervalOn === 'boolean') intervalToggle.checked = s.intervalOn;
+    if (s.intervalSec >= 2 && s.intervalSec <= 20) intervalSlider.value = s.intervalSec;
+  }
+
   let threshold = sensToThreshold(Number(sensSlider.value));
   let volume = Number(volSlider.value) / 100;
 
   sensSlider.addEventListener('input', () => {
     sensLabel.textContent = SENS_LABELS[sensSlider.value];
     threshold = sensToThreshold(Number(sensSlider.value));
+    saveSettings();
   });
   volSlider.addEventListener('input', () => {
     volLabel.textContent = volSlider.value + '%';
     volume = Number(volSlider.value) / 100;
+    saveSettings();
   });
+  function syncIntervalUI() {
+    intervalField.classList.toggle('hidden', !intervalToggle.checked);
+    intervalLabel.textContent = intervalSlider.value + '秒';
+  }
+  intervalToggle.addEventListener('change', () => { syncIntervalUI(); saveSettings(); });
+  intervalSlider.addEventListener('input', () => { syncIntervalUI(); saveSettings(); });
+
   sensLabel.textContent = SENS_LABELS[sensSlider.value];
+  volLabel.textContent = volSlider.value + '%';
+  syncIntervalUI();
 
   // ---- Audio: synthesized bell (suzu) sound ----
   // 鈴 = 中の玉が殻に何度も当たる音。単発のチャイムではなく、
@@ -453,6 +604,43 @@
     bellIcon.classList.remove('swing');
     void bellIcon.offsetWidth;
     bellIcon.classList.add('swing');
+    if (dimOverlay.classList.contains('show')) {
+      dimDot.classList.add('on');
+      setTimeout(() => dimDot.classList.remove('on'), 150);
+    }
+  }
+
+  // ---- 省電力: 検知中は一定時間で画面を暗転 ----
+  const DIM_AFTER_MS = 20000;
+  let dimTimer = null;
+  function scheduleDim() {
+    clearTimeout(dimTimer);
+    if (running) dimTimer = setTimeout(() => dimOverlay.classList.add('show'), DIM_AFTER_MS);
+  }
+  function undim() {
+    dimOverlay.classList.remove('show');
+    scheduleDim();
+  }
+  dimOverlay.addEventListener('pointerdown', e => { e.preventDefault(); undim(); });
+  document.addEventListener('pointerdown', () => { if (running) scheduleDim(); });
+
+  // ---- 定期鳴動: 静かな時間が指定秒続いたら鳴らす ----
+  let intervalTimer = null;
+  function startIntervalLoop() {
+    stopIntervalLoop();
+    intervalTimer = setInterval(() => {
+      if (!running || !intervalToggle.checked) return;
+      const now = performance.now();
+      if (now - lastRing > Number(intervalSlider.value) * 1000) {
+        lastRing = now;
+        ringBell(0.5);
+        flashRing(0.5);
+      }
+    }, 400);
+  }
+  function stopIntervalLoop() {
+    clearInterval(intervalTimer);
+    intervalTimer = null;
   }
 
   // ---- Motion detection ----
@@ -558,6 +746,9 @@
       gravityInit = false;
       envelope = 0;
       lastMag = 0;
+      lastRing = performance.now();
+      startIntervalLoop();
+      scheduleDim();
       dial.classList.add('active');
       statusText.textContent = '検知中';
       mainBtn.textContent = '停止する';
@@ -573,6 +764,9 @@
 
   function stop() {
     running = false;
+    stopIntervalLoop();
+    clearTimeout(dimTimer);
+    dimOverlay.classList.remove('show');
     window.removeEventListener('devicemotion', handleMotion);
     if (wakeLock) { wakeLock.release().catch(()=>{}); wakeLock = null; }
     dial.classList.remove('active');
@@ -593,6 +787,11 @@
     ringBell(0.8);
     flashRing(0.8);
   });
+
+  // ---- PWA: オフライン動作用のService Worker ----
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
 })();
 </script>
 
