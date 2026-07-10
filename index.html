@@ -338,47 +338,108 @@
   sensLabel.textContent = SENS_LABELS[sensSlider.value];
 
   // ---- Audio: synthesized bell (suzu) sound ----
+  // 鈴 = 中の玉が殻に何度も当たる音。単発のチャイムではなく、
+  // 高域の非整数倍音を持つ微小ストライクを短時間に重ねて「シャラーン」を作る。
   let audioCtx = null;
+  let dryBus = null;
+  let reverbBus = null;
+  let noiseBuf = null;
+
+  function makeImpulseResponse(ctx, seconds, decayPow) {
+    const len = Math.floor(ctx.sampleRate * seconds);
+    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < len; i++) {
+        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decayPow);
+      }
+    }
+    return buf;
+  }
+
   function ensureAudio() {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      dryBus = audioCtx.createGain();
+      dryBus.gain.value = 0.85;
+      dryBus.connect(audioCtx.destination);
+
+      // 短い残響で「シャラーン」の余韻を作る
+      const convolver = audioCtx.createConvolver();
+      convolver.buffer = makeImpulseResponse(audioCtx, 0.7, 3.5);
+      reverbBus = audioCtx.createGain();
+      reverbBus.gain.value = 0.5;
+      reverbBus.connect(convolver);
+      convolver.connect(audioCtx.destination);
+
+      // 打撃音のアタック用ノイズ
+      const nLen = Math.floor(audioCtx.sampleRate * 0.1);
+      noiseBuf = audioCtx.createBuffer(1, nLen, audioCtx.sampleRate);
+      const nd = noiseBuf.getChannelData(0);
+      for (let i = 0; i < nLen; i++) nd[i] = Math.random() * 2 - 1;
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
     return audioCtx;
   }
 
-  function playChime(gain) {
-    const ctx = ensureAudio();
-    const now = ctx.currentTime;
-    const master = ctx.createGain();
-    master.gain.value = gain;
-    master.connect(ctx.destination);
+  // 1回の「チッ」= 玉が殻に当たる音。時刻はAudioContextの時計で指定。
+  function strike(time, vel) {
+    const ctx = audioCtx;
+    const out = ctx.createGain();
+    out.gain.value = vel;
+    out.connect(dryBus);
+    out.connect(reverbBus);
 
-    const partials = [2000, 2950, 4200];
-    partials.forEach((freq, i) => {
+    // 殻の共鳴：非整数倍音（金属らしさ）。個体差として毎回わずかに揺らす
+    const base = 3400 + Math.random() * 1600;
+    const ratios = [1, 1.483, 2.106, 2.72];
+    const peaks = [1, 0.55, 0.32, 0.18];
+    ratios.forEach((ratio, i) => {
       const osc = ctx.createOscillator();
       osc.type = 'sine';
-      const detune = (Math.random() - 0.5) * 30;
-      osc.frequency.value = freq + detune;
+      osc.frequency.value = base * ratio * (1 + (Math.random() - 0.5) * 0.012);
 
       const g = ctx.createGain();
-      const peak = i === 0 ? 0.9 : 0.4 / (i + 1);
-      g.gain.setValueAtTime(0, now);
-      g.gain.linearRampToValueAtTime(peak, now + 0.004);
-      g.gain.exponentialRampToValueAtTime(0.0008, now + 0.32 + i * 0.02);
+      // 高次ほど早く消える。基音だけ少し長く鳴らして芯を残す
+      const decay = (i === 0 ? 0.22 : 0.05) + Math.random() * 0.06;
+      g.gain.setValueAtTime(0, time);
+      g.gain.linearRampToValueAtTime(peaks[i], time + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0006, time + decay);
 
       osc.connect(g);
-      g.connect(master);
-      osc.start(now);
-      osc.stop(now + 0.4);
+      g.connect(out);
+      osc.start(time);
+      osc.stop(time + decay + 0.05);
     });
+
+    // アタックの「シュッ」: 帯域を絞ったノイズの一瞬
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuf;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = base * 1.3;
+    bp.Q.value = 1.2;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.5, time);
+    ng.gain.exponentialRampToValueAtTime(0.001, time + 0.025);
+    noise.connect(bp); bp.connect(ng); ng.connect(out);
+    noise.start(time);
+    noise.stop(time + 0.05);
   }
 
   function ringBell(intensity) {
-    // intensity 0..1 -> slight volume scaling + a quick double "jingle"
-    const base = 0.15 + intensity * 0.55;
-    playChime(base * volume);
-    setTimeout(() => playChime(base * 0.7 * volume), 70 + Math.random() * 40);
+    const ctx = ensureAudio();
+    const t0 = ctx.currentTime;
+    // 強く振るほど玉が多く当たる = ストライク数と密度を上げる
+    const count = 3 + Math.round(intensity * 6);
+    let t = t0;
+    for (let i = 0; i < count; i++) {
+      const fade = 1 - (i / count) * 0.55; // 後半は減衰
+      const vel = (0.45 + Math.random() * 0.55) * (0.2 + intensity * 0.6) * fade * volume;
+      strike(t, vel);
+      t += 0.014 + Math.random() * 0.028;
+    }
   }
 
   // ---- Visual feedback ----
@@ -399,7 +460,8 @@
   let gravity = {x:0, y:0, z:0};
   let gravityInit = false;
   let lastRing = 0;
-  const COOLDOWN_MS = 260;
+  let envelope = 0;       // 動きの強さの包絡線（アタック即時・リリース緩やか）
+  let lastMag = 0;
   let wakeLock = null;
 
   function handleMotion(e) {
@@ -426,14 +488,34 @@
       return;
     }
 
-    const mag = Math.sqrt(ax*ax + ay*ay + az*az);
-    const meterPct = Math.min(100, (mag / (threshold * 1.6)) * 100);
-    meterFill.style.width = meterPct + '%';
+    let mag = Math.sqrt(ax*ax + ay*ay + az*az);
+
+    // 回転（手首のひねり等）も揺れとして加味する。deg/s を m/s^2 相当に換算
+    const rot = e.rotationRate;
+    if (rot && rot.alpha !== null && rot.alpha !== undefined) {
+      const rotMag = Math.sqrt(
+        (rot.alpha||0)**2 + (rot.beta||0)**2 + (rot.gamma||0)**2
+      ) / 90;
+      mag += rotMag * 0.6;
+    }
+
+    // 加速度の変化分（ジャーク）を混ぜると、歩行の一歩ごとの衝撃を拾いやすい
+    const jerk = Math.abs(mag - lastMag);
+    lastMag = mag;
+    const drive = mag * 0.7 + jerk * 0.8;
+
+    // 包絡線: 立ち上がりは即時、減衰はゆっくり。これで判定と表示が滑らかになる
+    envelope = Math.max(drive, envelope * 0.92);
+
+    meterFill.style.width = Math.min(100, (envelope / (threshold * 1.6)) * 100) + '%';
 
     const now = performance.now();
-    if (mag > threshold && now - lastRing > COOLDOWN_MS) {
+    // 強く動くほど鳴る間隔が詰まる（実物の鈴の挙動に近づける）
+    const over = envelope / threshold;
+    const cooldown = over > 2 ? 130 : over > 1.4 ? 200 : 300;
+    if (envelope > threshold && now - lastRing > cooldown) {
       lastRing = now;
-      const intensity = Math.min(1, mag / (threshold * 3));
+      const intensity = Math.min(1, envelope / (threshold * 2.5));
       ringBell(intensity);
       flashRing(intensity);
     }
@@ -456,7 +538,7 @@
     try {
       ensureAudio();
       // unlock audio with a silent tick (required by some mobile browsers)
-      playChime(0.0001);
+      strike(audioCtx.currentTime, 0.0001);
 
       if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         const perm = await DeviceMotionEvent.requestPermission();
@@ -474,6 +556,8 @@
 
       running = true;
       gravityInit = false;
+      envelope = 0;
+      lastMag = 0;
       dial.classList.add('active');
       statusText.textContent = '検知中';
       mainBtn.textContent = '停止する';
