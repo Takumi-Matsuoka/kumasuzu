@@ -488,9 +488,10 @@
   volLabel.textContent = volSlider.value + '%';
   syncIntervalUI();
 
-  // ---- Audio: synthesized bell (suzu) sound ----
-  // 鈴 = 中の玉が殻に何度も当たる音。単発のチャイムではなく、
-  // 高域の非整数倍音を持つ微小ストライクを短時間に重ねて「シャラーン」を作る。
+  // ---- Audio: synthesized bell sound ----
+  // 熊鈴の「チリーン」= 澄んだ基音が長く尾を引き、わずかにうなる音。
+  // 各モードをごく僅かにデチューンした2本のsineで鳴らすと、
+  // 実物の鐘特有の「ワーンワーン」といううなり（ビート）が出る。
   let audioCtx = null;
   let dryBus = null;
   let reverbBus = null;
@@ -516,9 +517,9 @@
       dryBus.gain.value = 0.85;
       dryBus.connect(audioCtx.destination);
 
-      // 短い残響で「シャラーン」の余韻を作る
+      // 残響で「チリーン」の余韻に空気感を足す
       const convolver = audioCtx.createConvolver();
-      convolver.buffer = makeImpulseResponse(audioCtx, 0.7, 3.5);
+      convolver.buffer = makeImpulseResponse(audioCtx, 1.1, 3.0);
       reverbBus = audioCtx.createGain();
       reverbBus.gain.value = 0.5;
       reverbBus.connect(convolver);
@@ -534,7 +535,20 @@
     return audioCtx;
   }
 
-  // 1回の「チッ」= 玉が殻に当たる音。時刻はAudioContextの時計で指定。
+  // 鐘の音程は個体で固定（打つたびに音程が変わると別の鈴に聞こえる）
+  const BELL_BASE = 2550;
+
+  // 小型ベルの振動モード。比率は非整数（金属鐘の特徴）、
+  // 基音ほど長く鳴り、高次モードはアタックの「チッ」だけ担って早く消える
+  const BELL_MODES = [
+    { ratio: 1,    peak: 1,    decay: 1.7  },
+    { ratio: 1.51, peak: 0.38, decay: 0.95 },
+    { ratio: 2.03, peak: 0.24, decay: 0.55 },
+    { ratio: 2.74, peak: 0.14, decay: 0.3  },
+    { ratio: 4.07, peak: 0.08, decay: 0.15 },
+  ];
+
+  // 1打 = クラッパーが殻に当たって「チリーン」と尾を引く
   function strike(time, vel) {
     const ctx = audioCtx;
     const out = ctx.createGain();
@@ -542,38 +556,40 @@
     out.connect(dryBus);
     out.connect(reverbBus);
 
-    // 殻の共鳴：非整数倍音（金属らしさ）。個体差として毎回わずかに揺らす
-    const base = 3400 + Math.random() * 1600;
-    const ratios = [1, 1.483, 2.106, 2.72];
-    const peaks = [1, 0.55, 0.32, 0.18];
-    ratios.forEach((ratio, i) => {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = base * ratio * (1 + (Math.random() - 0.5) * 0.012);
+    // 弱い打撃は余韻も短い
+    const decayScale = 0.55 + Math.min(1, vel * 1.6) * 0.45;
 
-      const g = ctx.createGain();
-      // 高次ほど早く消える。基音だけ少し長く鳴らして芯を残す
-      const decay = (i === 0 ? 0.22 : 0.05) + Math.random() * 0.06;
-      g.gain.setValueAtTime(0, time);
-      g.gain.linearRampToValueAtTime(peaks[i], time + 0.002);
-      g.gain.exponentialRampToValueAtTime(0.0006, time + decay);
+    BELL_MODES.forEach(m => {
+      // ±にわずかにずらした2本で3〜6Hz程度のうなりを作る
+      [-1, 1].forEach(sign => {
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        const beat = 1 + sign * (0.0009 + Math.random() * 0.0007);
+        osc.frequency.value = BELL_BASE * m.ratio * beat;
 
-      osc.connect(g);
-      g.connect(out);
-      osc.start(time);
-      osc.stop(time + decay + 0.05);
+        const g = ctx.createGain();
+        const decay = m.decay * decayScale;
+        g.gain.setValueAtTime(0, time);
+        g.gain.linearRampToValueAtTime(m.peak * 0.5, time + 0.003);
+        g.gain.exponentialRampToValueAtTime(0.0004, time + decay);
+
+        osc.connect(g);
+        g.connect(out);
+        osc.start(time);
+        osc.stop(time + decay + 0.1);
+      });
     });
 
-    // アタックの「シュッ」: 帯域を絞ったノイズの一瞬
+    // アタックの「チッ」: 帯域を絞ったノイズの一瞬
     const noise = ctx.createBufferSource();
     noise.buffer = noiseBuf;
     const bp = ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = base * 1.3;
-    bp.Q.value = 1.2;
+    bp.frequency.value = BELL_BASE * 1.6;
+    bp.Q.value = 1.4;
     const ng = ctx.createGain();
-    ng.gain.setValueAtTime(0.5, time);
-    ng.gain.exponentialRampToValueAtTime(0.001, time + 0.025);
+    ng.gain.setValueAtTime(0.4, time);
+    ng.gain.exponentialRampToValueAtTime(0.001, time + 0.02);
     noise.connect(bp); bp.connect(ng); ng.connect(out);
     noise.start(time);
     noise.stop(time + 0.05);
@@ -582,14 +598,11 @@
   function ringBell(intensity) {
     const ctx = ensureAudio();
     const t0 = ctx.currentTime;
-    // 強く振るほど玉が多く当たる = ストライク数と密度を上げる
-    const count = 3 + Math.round(intensity * 6);
-    let t = t0;
-    for (let i = 0; i < count; i++) {
-      const fade = 1 - (i / count) * 0.55; // 後半は減衰
-      const vel = (0.45 + Math.random() * 0.55) * (0.2 + intensity * 0.6) * fade * volume;
-      strike(t, vel);
-      t += 0.014 + Math.random() * 0.028;
+    const vel = (0.3 + intensity * 0.7) * volume;
+    strike(t0, vel);
+    // 強く振るとクラッパーが跳ね返って弱い2打目が入る
+    if (Math.random() < 0.35 + intensity * 0.45) {
+      strike(t0 + 0.05 + Math.random() * 0.045, vel * 0.35);
     }
   }
 
@@ -698,9 +711,9 @@
     meterFill.style.width = Math.min(100, (envelope / (threshold * 1.6)) * 100) + '%';
 
     const now = performance.now();
-    // 強く動くほど鳴る間隔が詰まる（実物の鈴の挙動に近づける）
+    // 強く動くほど鳴る間隔が詰まる。余韻が長いので歩行の1歩（約0.5秒）を基準に
     const over = envelope / threshold;
-    const cooldown = over > 2 ? 130 : over > 1.4 ? 200 : 300;
+    const cooldown = over > 2 ? 220 : over > 1.4 ? 350 : 500;
     if (envelope > threshold && now - lastRing > cooldown) {
       lastRing = now;
       const intensity = Math.min(1, envelope / (threshold * 2.5));
